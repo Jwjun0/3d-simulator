@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>크레이터 충돌 실험 오차 분석 시뮬레이터</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #0f172a; color: white; font-family: 'Inter', sans-serif; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 10; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 1.5rem; }
+        .panel { pointer-events: auto; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #38bdf8; cursor: pointer; margin-top: -6px; box-shadow: 0 0 10px rgba(56, 189, 248, 0.6); }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: #334155; border-radius: 2px; }
+        
+        .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    
+    <div id="ui-layer">
+        <!-- 상단 헤더 -->
+        <div class="panel w-full p-4 rounded-xl flex items-center justify-between shadow-lg">
+            <div>
+                <h1 class="text-lg font-bold text-transparent bg-clip-text bg-gradient-to-r from-sky-400 to-indigo-400">크레이터 형성 스케일링 오차 분석 시뮬레이터 (Section 5)</h1>
+                <p class="text-xs text-slate-400 mt-1">실제 모래 낙하 실험 결과(Lab)와 Holsapple 물리 공식(Theory) 간의 형상 오차 비교</p>
+            </div>
+            <div class="flex gap-4 text-xs font-medium bg-slate-900/50 p-2 rounded-lg border border-slate-700">
+                <div class="flex items-center"><span class="legend-dot bg-[#d4a373]"></span> 실제 실험 결과 지형 (Solid)</div>
+                <div class="flex items-center"><span class="legend-dot bg-blue-500 shadow-[0_0_8px_#3b82f6]"></span> 이론 공식 계산값 (Wireframe)</div>
+            </div>
+        </div>
+
+        <!-- 메인 인터페이스 -->
+        <div class="flex flex-1 gap-6 my-4 overflow-hidden">
+            <!-- 좌측: 실험 변인 컨트롤 패널 -->
+            <div class="panel w-80 p-5 rounded-xl flex flex-col gap-4 shadow-xl overflow-y-auto max-h-full">
+                <h2 class="text-sm font-bold text-slate-300 border-b border-slate-700 pb-2">🎯 실험 변인 설정 (통제 변수)</h2>
+                
+                <!-- 크기 (직경) -->
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1">구슬 크기 (직경)</label>
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        <button id="btn-size-25" onclick="setSize(2.5)" class="py-2 rounded-md font-medium border border-slate-600 bg-slate-700 text-slate-300 transition">2.5 cm (작은 구슬)</button>
+                        <button id="btn-size-50" onclick="setSize(5.0)" class="py-2 rounded-md font-medium border border-sky-500 bg-sky-600/30 text-sky-200 transition">5.0 cm (큰 구슬)</button>
+                    </div>
+                </div>
+
+                <!-- 재질 (무게) -->
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1 mt-1">구슬 재질</label>
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        <button id="btn-wood" onclick="setMaterial('wood')" class="py-2 rounded-md font-medium border border-slate-600 bg-slate-700 text-slate-300 transition">나무 구슬</button>
+                        <button id="btn-iron" onclick="setMaterial('iron')" class="py-2 rounded-md font-medium border border-sky-500 bg-sky-600/30 text-sky-200 transition">쇠 구슬</button>
+                    </div>
+                    <div class="flex justify-between text-xs text-slate-300 mt-2 bg-slate-800 p-2 rounded-md border border-slate-600">
+                        <span>적용된 질량 (Mass):</span>
+                        <span id="val-mass" class="text-emerald-400 font-bold">510 g</span>
+                    </div>
+                </div>
+
+                <!-- 낙하 높이 -->
+                <div>
+                    <div class="flex justify-between text-xs text-slate-300 mb-1 mt-1">
+                        <span>낙하 높이 ($h$)</span>
+                        <span id="val-height" class="text-sky-400 font-bold">30 cm</span>
+                    </div>
+                    <input type="range" id="slider-height" min="10" max="100" step="5" value="30" oninput="updateUI()">
+                </div>
+
+                <!-- 충돌 각도 -->
+                <div>
+                    <div class="flex justify-between text-xs text-slate-300 mb-1">
+                        <span>입사 각도 ($\theta$)</span>
+                        <span id="val-angle" class="text-sky-400 font-bold">90° (수직)</span>
+                    </div>
+                    <input type="range" id="slider-angle" min="15" max="90" step="5" value="90" oninput="updateUI()">
+                </div>
+
+                <!-- 반복 낙하 -->
+                <div>
+                    <div class="flex justify-between text-xs text-slate-300 mb-1">
+                        <span>동일 지점 반복 낙하</span>
+                        <span id="val-drops" class="text-sky-400 font-bold">1회</span>
+                    </div>
+                    <input type="range" id="slider-drops" min="1" max="3" step="1" value="1" oninput="updateUI()">
+                </div>
+
+                <!-- 기타 환경 변수 -->
+                <div class="space-y-3 pt-2 border-t border-slate-700">
+                    <div>
+                        <label class="block text-xs text-slate-400 mb-1">모래 습윤도 (물 뿌리기)</label>
+                        <select id="select-wetness" onchange="updateUI()" class="w-full bg-slate-800 border border-slate-600 rounded-md p-2 text-xs text-slate-200 outline-none focus:border-sky-500">
+                            <option value="0">건조 모래 (기본)</option>
+                            <option value="10">10회 분사 (30분 건조)</option>
+                            <option value="30">30회 분사 (30분 건조)</option>
+                        </select>
+                    </div>
+
+                    <label class="flex items-center justify-between cursor-pointer mt-3 bg-slate-800 p-2 rounded-md border border-slate-600">
+                        <span class="text-xs text-slate-300">이중 레이어 (하부층 노출)</span>
+                        <input type="checkbox" id="toggle-layer" class="w-4 h-4 rounded text-sky-500 bg-slate-800 border-slate-600 focus:ring-sky-500 focus:ring-2" onchange="updateUI()">
+                    </label>
+                </div>
+
+                <!-- 실행 버튼 -->
+                <div class="mt-auto flex flex-col gap-2 pt-4">
+                    <button onclick="runSimulation()" class="w-full py-3 bg-sky-600 hover:bg-sky-500 rounded-lg font-bold text-white shadow-[0_0_15px_rgba(2,132,199,0.5)] transition">
+                        실험 시뮬레이션 낙하
+                    </button>
+                    <button onclick="resetTerrain()" class="w-full py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-xs text-slate-300 transition">
+                        모래 평탄화 (초기화)
+                    </button>
+                </div>
+            </div>
+
+            <!-- 우측: 오차 분석 결과 패널 -->
+            <div class="panel w-[340px] p-5 rounded-xl flex flex-col gap-4 shadow-xl ml-auto h-fit">
+                <h2 class="text-sm font-bold text-slate-300 border-b border-slate-700 pb-2">📊 스케일링 오차 데이터</h2>
+                
+                <!-- 실제 실험 데이터 추정치 -->
+                <div class="bg-[#d4a373]/10 border border-[#d4a373]/30 p-3 rounded-lg">
+                    <h3 class="text-xs font-bold text-[#e6b88a] mb-2 flex items-center gap-2"><span class="legend-dot bg-[#d4a373]"></span>실제 측정 기반 추정치 (Lab)</h3>
+                    <div class="space-y-1 text-xs">
+                        <div class="flex justify-between text-slate-300"><span>장축 직경:</span> <span id="res-lab-major" class="font-mono font-bold text-white">0.0 cm</span></div>
+                        <div class="flex justify-between text-slate-300"><span>단축 직경:</span> <span id="res-lab-minor" class="font-mono font-bold text-white">0.0 cm</span></div>
+                        <div class="flex justify-between text-slate-300"><span>최대 깊이:</span> <span id="res-lab-depth" class="font-mono font-bold text-white">0.0 cm</span></div>
+                    </div>
+                </div>
+
+                <!-- 이론 공식 데이터 -->
+                <div class="bg-blue-900/20 border border-blue-500/30 p-3 rounded-lg">
+                    <h3 class="text-xs font-bold text-blue-400 mb-2 flex items-center gap-2"><span class="legend-dot bg-blue-500 shadow-[0_0_8px_#3b82f6]"></span>공식 이론값 (Theory)</h3>
+                    <div class="space-y-1 text-xs">
+                        <div class="flex justify-between text-slate-300"><span>이론 직경:</span> <span id="res-theo-major" class="font-mono font-bold text-white">0.0 cm</span></div>
+                        <div class="flex justify-between text-slate-300"><span>이론 깊이:</span> <span id="res-theo-depth" class="font-mono font-bold text-white">0.0 cm</span></div>
+                    </div>
+                </div>
+
+                <!-- 오차율 분석 -->
+                <div class="mt-2 text-center p-3 bg-red-950/40 border border-red-900/50 rounded-lg">
+                    <div class="text-[11px] text-red-300 mb-1">직경 스케일 오차율</div>
+                    <div class="text-2xl font-black text-red-500" id="res-error-rate">0%</div>
+                    <p id="error-desc" class="text-[10px] text-slate-400 mt-2 text-left leading-relaxed">
+                        * 저속 낙하 시 모래의 응집력 부재(Cohesionless)로 인해 공식보다 크레이터가 과대 형성되는 강도 지배 영역(Strength-dominated) 오차 발생.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let sandMesh, wireframeMesh, containerMesh, ballMesh;
+        let sandGeo, wireframeGeo;
+        let isAnimating = false;
+
+        // 상태 변수
+        let state = {
+            material: 'iron',
+            size: 5.0,     // cm
+            height: 30,    // cm
+            angle: 90,     // degree
+            dropCount: 1,  // 1, 2, 3
+            isDoubleLayer: false,
+            wetness: 0,    // 0, 10, 30
+            // 학생 실험 데이터의 정확한 질량 매핑
+            getMass: function() {
+                if (this.material === 'iron') {
+                    return this.size === 5.0 ? 510 : 66; // 쇠구슬
+                } else {
+                    return this.size === 5.0 ? 42 : 5;   // 나무구슬
+                }
+            }
+        };
+
+        const GRID_SIZE = 40; // 40cm x 40cm 모래 상자
+        const GRID_RES = 150; // Vertex 해상도
+
+        init();
+        animate();
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0f172a);
+            
+            // 1 Unit = 1 cm
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 35, 45);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.maxPolarAngle = Math.PI / 2 - 0.1;
+
+            // 조명
+            const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambient);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(20, 30, 10);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            createLabEnvironment();
+            updateUI();
+            
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        function createLabEnvironment() {
+            // 모래를 담는 나무 상자
+            const boxGeo = new THREE.BoxGeometry(GRID_SIZE + 2, 8, GRID_SIZE + 2);
+            const boxMat = new THREE.MeshStandardMaterial({ color: 0x4a3728 });
+            containerMesh = new THREE.Mesh(boxGeo, boxMat);
+            containerMesh.position.y = -4;
+            containerMesh.receiveShadow = true;
+            scene.add(containerMesh);
+
+            // 실제 모래 지면 (Solid)
+            sandGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE, GRID_RES, GRID_RES);
+            sandGeo.rotateX(-Math.PI / 2);
+            
+            // 색상 배열 초기화
+            const colors = [];
+            for (let i = 0; i < sandGeo.attributes.position.count; i++) {
+                colors.push(0.83, 0.64, 0.45); // 황토 모래색 #d4a373
+            }
+            sandGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+            const sandMat = new THREE.MeshStandardMaterial({ 
+                vertexColors: true, roughness: 1.0, flatShading: true 
+            });
+            sandMesh = new THREE.Mesh(sandGeo, sandMat);
+            sandMesh.position.y = 0.01;
+            sandMesh.receiveShadow = true;
+            scene.add(sandMesh);
+
+            // 이론치 홀로그램 지면 (Wireframe)
+            wireframeGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE, GRID_RES, GRID_RES);
+            wireframeGeo.rotateX(-Math.PI / 2);
+            const wireMat = new THREE.MeshBasicMaterial({ 
+                color: 0x3b82f6, wireframe: true, transparent: true, opacity: 0.15 
+            });
+            wireframeMesh = new THREE.Mesh(wireframeGeo, wireMat);
+            wireframeMesh.position.y = 0.05;
+            scene.add(wireframeMesh);
+
+            // 떨어지는 구슬 (기준 크기 5.0cm)
+            const ballGeo = new THREE.SphereGeometry(5.0 / 2, 32, 32);
+            const ballMat = new THREE.MeshStandardMaterial({ color: 0x71717a, roughness: 0.4, metalness: 0.8 });
+            ballMesh = new THREE.Mesh(ballGeo, ballMat);
+            ballMesh.castShadow = true;
+            ballMesh.visible = false;
+            scene.add(ballMesh);
+        }
+
+        function setSize(s) {
+            if (state.wetness > 0 && s !== 2.5) {
+                // 습윤도 실험은 2.5 쇠구슬 전용으로 해제
+                document.getElementById('select-wetness').value = "0";
+                state.wetness = 0;
+            }
+            state.size = s;
+            document.getElementById('btn-size-25').className = s === 2.5 ? "py-2 rounded-md font-medium border border-sky-500 bg-sky-600/30 text-sky-200 transition" : "py-2 rounded-md font-medium border border-slate-600 bg-slate-700 text-slate-300 transition";
+            document.getElementById('btn-size-50').className = s === 5.0 ? "py-2 rounded-md font-medium border border-sky-500 bg-sky-600/30 text-sky-200 transition" : "py-2 rounded-md font-medium border border-slate-600 bg-slate-700 text-slate-300 transition";
+            
+            // 3D 구슬 스케일 조정
+            ballMesh.scale.setScalar(state.size / 5.0);
+            updateUI();
+        }
+
+        function setMaterial(mat) {
+            if (state.wetness > 0 && mat !== 'iron') {
+                document.getElementById('select-wetness').value = "0";
+                state.wetness = 0;
+            }
+            state.material = mat;
+            document.getElementById('btn-iron').className = "py-2 rounded-md font-medium border border-slate-600 bg-slate-700 text-slate-300 transition";
+            document.getElementById('btn-wood').className = "py-2 rounded-md font-medium border border-slate-600 bg-slate-700 text-slate-300 transition";
+            
+            if(mat === 'iron') {
+                document.getElementById('btn-iron').className = "py-2 rounded-md font-medium border border-sky-500 bg-sky-600/30 text-sky-200 transition";
+                ballMesh.material.color.setHex(0x71717a); // 쇠 색
+            } else {
+                document.getElementById('btn-wood').className = "py-2 rounded-md font-medium border border-amber-500 bg-amber-600/30 text-amber-200 transition";
+                ballMesh.material.color.setHex(0xc28f5b); // 나무 색
+            }
+            updateUI();
+        }
+
+        // 학생들의 실험 엑셀 데이터 기반 알고리즘 (Lab Data 하드코딩 및 보간)
+        function calcLabResult() {
+            let major, minor, depth;
+
+            // 1. 습윤도 변인 (무조건 2.5cm 쇠구슬 데이터 반영)
+            if (state.wetness === 10) {
+                major = 2.75; minor = 2.75; depth = 1.85;
+            } else if (state.wetness === 30) {
+                major = 2.50; minor = 2.50; depth = 1.25;
+            } 
+            // 2. 충돌 각도 변인 (30cm 기준)
+            else if (state.angle !== 90) {
+                if (state.angle === 15) { major = 14.37; minor = 11.47; depth = 2.03; }
+                else if (state.angle === 20) { major = 23.07; minor = 12.63; depth = 2.03; }
+                else if (state.angle === 45) { major = 9.23; minor = 6.63; depth = 1.53; }
+                else if (state.angle === 60) { major = 8.47; minor = 6.73; depth = 1.83; }
+                else {
+                    let f = state.angle / 90;
+                    major = 10.5 / Math.pow(f, 1.2); minor = 10.5 * Math.pow(f, 0.3); depth = 2.07 * f;
+                }
+                
+                // 크기/재질에 따른 스케일 보정
+                if (state.size === 2.5) { major *= 0.65; minor *= 0.65; depth *= 0.7; }
+                if (state.material === 'wood') { major *= 0.52; minor *= 0.52; depth *= 0.48; }
+            }
+            // 3. 반복 낙하 변인
+            else if (state.dropCount > 1) {
+                if (state.material === 'iron' && state.size === 2.5) {
+                    if (state.dropCount === 2) { major = 6.83; minor = 6.83; depth = 1.60; }
+                    if (state.dropCount === 3) { major = 6.83; minor = 6.83; depth = 1.70; }
+                } else if (state.material === 'wood' && state.size === 5.0) {
+                    if (state.dropCount === 2) { major = 7.00; minor = 7.00; depth = 1.33; }
+                    if (state.dropCount === 3) { major = 7.03; minor = 7.03; depth = 1.43; }
+                } else {
+                    let base = calcLabBase();
+                    major = base.major * (1 + (state.dropCount - 1) * 0.02);
+                    minor = base.minor * (1 + (state.dropCount - 1) * 0.02);
+                    depth = base.depth * (1 + (state.dropCount - 1) * 0.08);
+                }
+            } 
+            // 4. 기본 낙하 변인 (90도, 1회, 건조)
+            else {
+                let base = calcLabBase();
+                major = base.major; minor = base.minor; depth = base.depth;
+            }
+
+            return { major, minor, depth };
+        }
+
+        // 기본 실험 데이터 하드코딩
+        function calcLabBase() {
+            if (state.material === 'wood' && state.size === 5.0 && state.height === 30) return {major: 5.5, minor: 5.5, depth: 1.0};
+            if (state.material === 'wood' && state.size === 5.0 && state.height === 50) return {major: 7.23, minor: 7.23, depth: 1.57};
+            if (state.material === 'iron' && state.size === 5.0 && state.height === 30) return {major: 10.5, minor: 10.5, depth: 2.07};
+            if (state.material === 'iron' && state.size === 2.5 && state.height === 30) return {major: 6.83, minor: 6.83, depth: 1.47};
+            
+            // 기타 보간 처리
+            let m = state.material === 'iron' ? 10.5 : 5.5;
+            let d = state.material === 'iron' ? 2.07 : 1.0;
+            let sizeF = state.size === 2.5 ? 0.65 : 1.0; 
+            let hF = Math.pow(state.height / 30, 0.55);
+            return { major: m * sizeF * hF, minor: m * sizeF * hF, depth: d * sizeF * hF };
+        }
+
+        // Holsapple Pi-Scaling 물리 공식 기반 (Theory Data)
+        function calcTheoResult() {
+            const g = 9.81; // 지구 중력 가속도 m/s^2
+            const v = Math.sqrt(2 * g * (state.height / 100)); // 충돌 속도 m/s
+            
+            const mass_kg = state.getMass() / 1000;
+            const r_m = (state.size / 100) / 2;
+            const volume_m3 = (4/3) * Math.PI * Math.pow(r_m, 3);
+            
+            // 운석 밀도 역산
+            const rho_i = mass_kg / volume_m3;
+            // 이론(중력 스케일링)은 모래의 습윤도(점착력)를 완전히 반영하지 못함
+            const rho_t = state.wetness > 0 ? 1800 : 1500; 
+            
+            const L = state.size / 100; // 운석 지름 m
+            const angleRad = state.angle * Math.PI / 180;
+
+            // Holsapple Formula (Gravity regime - 행성 지각 충돌 스케일링)
+            let D_meters = 1.16 * Math.pow(rho_i / rho_t, 0.33) * Math.pow(L, 0.78) * Math.pow(v, 0.44) * Math.pow(g, -0.22) * Math.pow(Math.sin(angleRad), 0.33);
+            
+            let D_cm = D_meters * 100; // cm로 변환
+            
+            let major = D_cm / Math.sqrt(Math.sin(angleRad));
+            let minor = D_cm * Math.sqrt(Math.sin(angleRad));
+            let depth = D_cm * 0.18 * Math.sin(angleRad);
+
+            // 반복 낙하시 이론상 크레이터 성장 (에너지 누적의 대략적인 근사치)
+            let dropFactor = Math.pow(state.dropCount, 0.33);
+            major *= dropFactor;
+            minor *= dropFactor;
+            depth *= Math.pow(state.dropCount, 0.2);
+
+            return { major, minor, depth };
+        }
+
+        function updateUI() {
+            state.height = parseFloat(document.getElementById('slider-height').value);
+            state.angle = parseInt(document.getElementById('slider-angle').value);
+            state.dropCount = parseInt(document.getElementById('slider-drops').value);
+            state.isDoubleLayer = document.getElementById('toggle-layer').checked;
+            
+            state.wetness = parseInt(document.getElementById('select-wetness').value);
+            if (state.wetness > 0) {
+                // 습윤도 실험 시 2.5cm 쇠구슬로 강제 고정 (UI 업데이트)
+                state.size = 2.5;
+                state.material = 'iron';
+                document.getElementById('btn-size-25').className = "py-2 rounded-md font-medium border border-sky-500 bg-sky-600/30 text-sky-200 transition";
+                document.getElementById('btn-size-50').className = "py-2 rounded-md font-medium border border-slate-600 bg-slate-700 text-slate-300 transition";
+                document.getElementById('btn-iron').className = "py-2 rounded-md font-medium border border-sky-500 bg-sky-600/30 text-sky-200 transition";
+                document.getElementById('btn-wood').className = "py-2 rounded-md font-medium border border-slate-600 bg-slate-700 text-slate-300 transition";
+                ballMesh.scale.setScalar(2.5 / 5.0);
+                ballMesh.material.color.setHex(0x71717a);
+            }
+
+            document.getElementById('val-height').innerText = `${state.height} cm`;
+            document.getElementById('val-angle').innerText = state.angle === 90 ? `90° (수직)` : `${state.angle}°`;
+            document.getElementById('val-drops').innerText = `${state.dropCount}회`;
+            document.getElementById('val-mass').innerText = `${state.getMass()} g`;
+
+            let lab = calcLabResult();
+            let theo = calcTheoResult();
+
+            document.getElementById('res-lab-major').innerText = `${lab.major.toFixed(1)} cm`;
+            document.getElementById('res-lab-minor').innerText = `${lab.minor.toFixed(1)} cm`;
+            document.getElementById('res-lab-depth').innerText = `${lab.depth.toFixed(1)} cm`;
+
+            document.getElementById('res-theo-major').innerText = `${theo.major.toFixed(1)} cm`;
+            document.getElementById('res-theo-depth').innerText = `${theo.depth.toFixed(1)} cm`;
+
+            let errorRate = ((lab.major - theo.major) / theo.major * 100).toFixed(0);
+            
+            let errorText = "";
+            if (state.wetness > 0) {
+                errorText = "* Holsapple 공식(중력 지배)은 젖은 모래의 강한 점착력(Cohesion)을 고려하지 못해 크레이터가 크게 예측(Theory)되나, 실제 실험(Lab)은 수분 결합력으로 인해 크레이터 파임이 억제되는 극적인 오차가 발생함.";
+            } else if (errorRate < 0) {
+                errorText = "* 행성 충돌 공식은 초고속 유체화를 가정하므로, 저속 구슬 낙하 실험에서는 모래 내부 마찰에 의해 에너지가 손실되어 실제(Lab)가 이론치(Theory)보다 덜 파이게 됨.";
+            } else {
+                errorText = "* 저속 역학적 굴삭 작용이나 낮은 충돌 각도에 의해 실제 지형(Lab)이 중력 스케일 이론(Theory)을 초과하는 오차 발생.";
+            }
+
+            document.getElementById('res-error-rate').innerText = (errorRate > 0 ? `+` : ``) + `${errorRate}%`;
+            document.getElementById('res-error-rate').className = errorRate < 0 ? "text-2xl font-black text-sky-400" : "text-2xl font-black text-red-500";
+            document.getElementById('error-desc').innerText = errorText;
+        }
+
+        function deformTerrain(geo, params, isWireframe) {
+            const positions = geo.attributes.position.array;
+            const colors = geo.attributes.color ? geo.attributes.color.array : null;
+            
+            const rMajor = params.major / 2;
+            const rMinor = params.minor / 2;
+            const rimH = params.depth * 0.35;
+            const rimW = rMajor * 0.4;
+
+            for (let i = 0; i < positions.length; i += 3) {
+                let x = positions[i];
+                let z = positions[i + 2];
+                let dist = Math.sqrt(Math.pow(x / rMajor, 2) + Math.pow(z / rMinor, 2));
+
+                let y = 0;
+                if (dist <= 1.0) {
+                    y = -params.depth * (1 - Math.pow(dist, 2));
+                } else if (dist > 1.0 && dist <= 1.0 + (rimW / rMajor)) {
+                    let f = (dist - 1.0) / (rimW / rMajor);
+                    y = rimH * (1 - f) * Math.cos(f * Math.PI / 2);
+                }
+
+                positions[i + 1] = y;
+
+                // 솔리드 매쉬(Lab)의 경우 색상 계산 (이중 레이어 표현)
+                if (!isWireframe && colors) {
+                    // 깊이가 0.4cm 이상 파이면 무조건 하얀 베이킹소다가 보이도록 조건 완화
+                    if (state.isDoubleLayer && y < -0.4) {
+                        colors[i] = 0.95; colors[i+1] = 0.95; colors[i+2] = 0.95; // 흰색 파우더
+                    } else if (state.wetness > 0) {
+                        let dark = state.wetness === 30 ? 0.5 : 0.7; // 젖은 모래일수록 색이 짙어짐
+                        let shade = 1.0 + (y * 0.05);
+                        colors[i] = 0.83 * dark * shade; colors[i+1] = 0.64 * dark * shade; colors[i+2] = 0.45 * dark * shade;
+                    } else {
+                        let shade = 1.0 + (y * 0.05); // 음영
+                        colors[i] = 0.83 * shade; colors[i+1] = 0.64 * shade; colors[i+2] = 0.45 * shade;
+                    }
+                }
+            }
+            geo.attributes.position.needsUpdate = true;
+            if(colors) geo.attributes.color.needsUpdate = true;
+            geo.computeVertexNormals();
+        }
+
+        function runSimulation() {
+            if (isAnimating) return;
+            isAnimating = true;
+            resetTerrain(false); // 지우고 새로 시작
+
+            let lab = calcLabResult();
+            let theo = calcTheoResult();
+            
+            let angleRad = state.angle * Math.PI / 180;
+            let startDist = state.height; // cm 높이
+
+            let currentDrop = 0;
+
+            function performDrop() {
+                ballMesh.position.set(-startDist * Math.cos(angleRad), startDist * Math.sin(angleRad), 0);
+                ballMesh.visible = true;
+                
+                const duration = 500; // 낙하 속도
+                const startTime = performance.now();
+
+                function anim(time) {
+                    let p = (time - startTime) / duration;
+                    if (p > 1) p = 1;
+
+                    let ease = p * p; // 중력 가속도 표현
+                    ballMesh.position.x = (-startDist * Math.cos(angleRad)) * (1 - ease);
+                    ballMesh.position.y = (startDist * Math.sin(angleRad)) * (1 - ease);
+
+                    if (p < 1) {
+                        requestAnimationFrame(anim);
+                    } else {
+                        // 충돌 순간 처리
+                        ballMesh.visible = false;
+                        currentDrop++;
+
+                        // 횟수에 따라 분할하여 지형 파임 적용
+                        let partialLab = {
+                            major: lab.major * Math.pow(currentDrop / state.dropCount, 0.33),
+                            minor: lab.minor * Math.pow(currentDrop / state.dropCount, 0.33),
+                            depth: lab.depth * Math.pow(currentDrop / state.dropCount, 0.8)
+                        };
+                        let partialTheo = {
+                            major: theo.major * Math.pow(currentDrop / state.dropCount, 0.33),
+                            minor: theo.minor * Math.pow(currentDrop / state.dropCount, 0.33),
+                            depth: theo.depth * Math.pow(currentDrop / state.dropCount, 0.8)
+                        };
+
+                        if (currentDrop === state.dropCount) {
+                            deformTerrain(sandGeo, lab, false);
+                            deformTerrain(wireframeGeo, theo, true);
+                            wireframeMesh.material.opacity = 0.8; // 이론 와이어프레임 선명하게 켜기
+                        } else {
+                            deformTerrain(sandGeo, partialLab, false);
+                            deformTerrain(wireframeGeo, partialTheo, true);
+                        }
+                        
+                        shakeCamera();
+
+                        if (currentDrop < state.dropCount) {
+                            // 다음 낙하 스케줄 (약간의 대기 후 떨어짐)
+                            setTimeout(performDrop, 400);
+                        } else {
+                            isAnimating = false;
+                        }
+                    }
+                }
+                requestAnimationFrame(anim);
+            }
+            performDrop();
+        }
+
+        function shakeCamera() {
+            const startPos = camera.position.clone();
+            let frames = 15;
+            function shake() {
+                if (frames > 0) {
+                    camera.position.x = startPos.x + (Math.random() - 0.5) * 1.5;
+                    camera.position.y = startPos.y + (Math.random() - 0.5) * 1.5;
+                    frames--;
+                    requestAnimationFrame(shake);
+                } else {
+                    camera.position.copy(startPos);
+                }
+            }
+            shake();
+        }
+
+        function resetTerrain(clearState = true) {
+            const p1 = sandGeo.attributes.position.array;
+            const c1 = sandGeo.attributes.color.array;
+            const p2 = wireframeGeo.attributes.position.array;
+
+            for (let i = 0; i < p1.length; i += 3) {
+                p1[i + 1] = (Math.random() - 0.5) * 0.1; // 약간의 거친 표면
+                p2[i + 1] = 0;
+                
+                if (state.wetness > 0) {
+                    let dark = state.wetness === 30 ? 0.5 : 0.7;
+                    c1[i] = 0.83 * dark; c1[i+1] = 0.64 * dark; c1[i+2] = 0.45 * dark; 
+                } else {
+                    c1[i] = 0.83; c1[i+1] = 0.64; c1[i+2] = 0.45;
+                }
+            }
+            sandGeo.attributes.position.needsUpdate = true;
+            sandGeo.attributes.color.needsUpdate = true;
+            sandGeo.computeVertexNormals();
+
+            wireframeGeo.attributes.position.needsUpdate = true;
+            wireframeMesh.material.opacity = 0.15; // 와이어프레임 숨기기
+            
+            ballMesh.visible = false;
+            if(clearState) isAnimating = false;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
